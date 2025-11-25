@@ -62,6 +62,13 @@ SearchForAppWithDisplayName(CAppDB &db, AppsCategories Type, LPCWSTR Name)
 static BOOL
 HandleInstallCommand(CAppDB *db, LPWSTR szCommand, int argcLeft, LPWSTR *argvLeft)
 {
+    UINT flags = DAF_MODAL;
+    if (argcLeft >= 1 && !StrCmpIW(L"/S", argvLeft[0]))
+    {
+        flags |= DAF_SILENT;
+        argvLeft = &argvLeft[1], --argcLeft;
+    }
+
     if (argcLeft < 1)
     {
         InitRappsConsole();
@@ -80,12 +87,19 @@ HandleInstallCommand(CAppDB *db, LPWSTR szCommand, int argcLeft, LPWSTR *argvLef
         }
     }
 
-    return DownloadListOfApplications(Applications, TRUE);
+    return DownloadListOfApplications(Applications, flags);
 }
 
 static BOOL
 HandleSetupCommand(CAppDB *db, LPWSTR szCommand, int argcLeft, LPWSTR *argvLeft)
 {
+    UINT flags = DAF_MODAL;
+    if (argcLeft >= 1 && !StrCmpIW(L"/S", argvLeft[0]))
+    {
+        flags |= DAF_SILENT;
+        argvLeft = &argvLeft[1], --argcLeft;
+    }
+
     if (argcLeft != 1)
     {
         InitRappsConsole();
@@ -118,7 +132,7 @@ HandleSetupCommand(CAppDB *db, LPWSTR szCommand, int argcLeft, LPWSTR *argvLeft)
     }
     SetupCloseInfFile(InfHandle);
 
-    return DownloadListOfApplications(Applications, TRUE);
+    return DownloadListOfApplications(Applications, flags);
 }
 
 static BOOL
@@ -191,7 +205,7 @@ HandleUninstallCommand(CAppDB &db, UINT argcLeft, LPWSTR *argvLeft)
 
     if (pInfo)
     {
-        retval = pInfo->UninstallApplication(silent ? UCF_SILENT : UCF_NONE);
+        retval = pInfo->UninstallApplication((silent ? UCF_SILENT : UCF_NONE) | UCF_SAMEPROCESS);
     }
     delete pDelete;
     return retval;
@@ -200,6 +214,14 @@ HandleUninstallCommand(CAppDB &db, UINT argcLeft, LPWSTR *argvLeft)
 static BOOL
 HandleGenerateInstallerCommand(CAppDB &db, UINT argcLeft, LPWSTR *argvLeft)
 {
+    bool bSilent = false;
+    if (argcLeft && !StrCmpIW(argvLeft[0], L"/S"))
+    {
+        bSilent = true;
+        --argcLeft;
+        ++argvLeft;
+    }
+
     if (argcLeft != 2)
         return FALSE;
 
@@ -207,7 +229,7 @@ HandleGenerateInstallerCommand(CAppDB &db, UINT argcLeft, LPWSTR *argvLeft)
     if (!pAI)
         return FALSE;
 
-    return ExtractAndRunGeneratedInstaller(*pAI, argvLeft[1]);
+    return ExtractAndRunGeneratedInstaller(*pAI, argvLeft[1], bSilent);
 }
 
 static BOOL
@@ -331,13 +353,12 @@ ParseCmdAndExecute(LPWSTR lpCmdLine, BOOL bIsFirstLaunch, int nCmdShow)
     if (!argv)
         return FALSE;
 
-    CStringW Directory;
-    GetStorageDirectory(Directory);
-    CAppDB db(Directory);
+    CAppDB db(CAppDB::GetDefaultPath());
 
     BOOL bAppwizMode = (argc > 1 && MatchCmdOption(argv[1], CMD_KEY_APPWIZ));
     if (!bAppwizMode)
     {
+        CUpdateDatabaseMutex lock;
         if (SettingsInfo.bUpdateAtStart || bIsFirstLaunch)
             db.RemoveCached();
 
@@ -349,16 +370,17 @@ ParseCmdAndExecute(LPWSTR lpCmdLine, BOOL bIsFirstLaunch, int nCmdShow)
     if (argc == 1 || bAppwizMode) // RAPPS is launched without options or APPWIZ mode is requested
     {
         // Check whether the RAPPS MainWindow is already launched in another process
-        HANDLE hMutex;
+        CStringW szWindowText(MAKEINTRESOURCEW(bAppwizMode ? IDS_APPWIZ_TITLE : IDS_APPTITLE));
+        LPCWSTR pszMutex = bAppwizMode ? L"RAPPWIZ" : MAINWINDOWMUTEX;
 
-        hMutex = CreateMutexW(NULL, FALSE, szWindowClass);
+        HANDLE hMutex = CreateMutexW(NULL, FALSE, pszMutex);
         if ((!hMutex) || (GetLastError() == ERROR_ALREADY_EXISTS))
         {
             /* If already started, find its window */
             HWND hWindow;
             for (int wait = 2500, inter = 250; wait > 0; wait -= inter)
             {
-                if ((hWindow = FindWindowW(szWindowClass, NULL)) != NULL)
+                if ((hWindow = FindWindowW(szWindowClass, szWindowText)) != NULL)
                     break;
                 Sleep(inter);
             }
@@ -366,6 +388,7 @@ ParseCmdAndExecute(LPWSTR lpCmdLine, BOOL bIsFirstLaunch, int nCmdShow)
             if (hWindow)
             {
                 /* Activate the window in the other instance */
+                ShowWindow(hWindow, SW_SHOWNA);
                 SwitchToThisWindow(hWindow, TRUE);
                 if (bAppwizMode)
                     PostMessage(hWindow, WM_COMMAND, ID_ACTIVATE_APPWIZ, 0);
@@ -376,6 +399,7 @@ ParseCmdAndExecute(LPWSTR lpCmdLine, BOOL bIsFirstLaunch, int nCmdShow)
                 return FALSE;
             }
         }
+        szWindowText.Empty();
 
         CMainWindow wnd(&db, bAppwizMode);
         MainWindowLoop(&wnd, nCmdShow);

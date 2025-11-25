@@ -23,6 +23,15 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(shell);
 
+static const REGFOLDERINFO g_RegFolderInfo =
+{
+    PT_CONTROLS_NEWREGITEM,
+    0, NULL,
+    CLSID_ControlPanel,
+    L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}",
+    L"ControlPanel",
+};
+
 /***********************************************************************
 *   control panel implementation in shell namespace
 */
@@ -73,6 +82,14 @@ HRESULT WINAPI CControlPanelEnum::Initialize(DWORD dwFlags, IEnumIDList* pRegEnu
         return E_FAIL;
     AppendItemsFromEnumerator(pRegEnumerator);
     return S_OK;
+}
+
+static const CLSID* IsRegItem(LPCITEMIDLIST pidl)
+{
+    BYTE type = _ILGetType(pidl);
+    if (type == PT_CONTROLS_OLDREGITEM || type == PT_CONTROLS_NEWREGITEM)
+        return (CLSID*)((BYTE*)pidl + (pidl->mkid.cb - sizeof(CLSID)));
+    return NULL;
 }
 
 static LPITEMIDLIST _ILCreateCPanelApplet(LPCWSTR pszName, LPCWSTR pszDisplayName, LPCWSTR pszComment, int iIconIdx)
@@ -336,10 +353,10 @@ HRESULT WINAPI CControlPanelFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE
     switch(LOWORD(lParam))
     {
         case CONTROLPANEL_COL_NAME:
-            result = wcsicmp(pData1->szName + pData1->offsDispName, pData2->szName + pData2->offsDispName);
+            result = SHELL_StrCmpLogical(pData1->szName + pData1->offsDispName, pData2->szName + pData2->offsDispName);
             break;
         case CONTROLPANEL_COL_COMMENT:
-            result = wcsicmp(pData1->szName + pData1->offsComment, pData2->szName + pData2->offsComment);
+            result = SHELL_StrCmpLogical(pData1->szName + pData1->offsComment, pData2->szName + pData2->offsComment);
             break;
         default:
             ERR("Got wrong lParam!\n");
@@ -369,7 +386,7 @@ HRESULT WINAPI CControlPanelFolder::CreateViewObject(HWND hwndOwner, REFIID riid
             WARN("IContextMenu not implemented\n");
             hr = E_NOTIMPL;
         } else if (IsEqualIID(riid, IID_IShellView)) {
-            SFV_CREATE sfvparams = {sizeof(SFV_CREATE), this};
+            SFV_CREATE sfvparams = { sizeof(SFV_CREATE), this , NULL, this };
             hr = SHCreateShellFolderView(&sfvparams, (IShellView**)ppvOut);
         }
     }
@@ -556,8 +573,9 @@ HRESULT WINAPI CControlPanelFolder::GetDefaultColumnState(UINT iColumn, DWORD *p
 
 HRESULT WINAPI CControlPanelFolder::GetDetailsEx(PCUITEMID_CHILD pidl, const SHCOLUMNID *pscid, VARIANT *pv)
 {
-    FIXME("(%p)\n", this);
-    return E_NOTIMPL;
+    if (IsRegItem(pidl))
+        return m_regFolder->GetDetailsEx(pidl, pscid, pv);
+    return SH32_GetDetailsOfPKeyAsVariant(this, pidl, pscid, pv, FALSE);
 }
 
 HRESULT WINAPI CControlPanelFolder::GetDetailsOf(PCUITEMID_CHILD pidl, UINT iColumn, SHELLDETAILS *psd)
@@ -596,8 +614,12 @@ HRESULT WINAPI CControlPanelFolder::GetDetailsOf(PCUITEMID_CHILD pidl, UINT iCol
 
 HRESULT WINAPI CControlPanelFolder::MapColumnToSCID(UINT column, SHCOLUMNID *pscid)
 {
-    FIXME("(%p)\n", this);
-    return E_NOTIMPL;
+    switch (column)
+    {
+        case CONTROLPANEL_COL_NAME: return MakeSCID(*pscid, FMTID_Storage, PID_STG_NAME);
+        case CONTROLPANEL_COL_COMMENT: return MakeSCID(*pscid, FMTID_SummaryInformation, PIDSI_COMMENTS);
+    }
+    return E_INVALIDARG;
 }
 
 /************************************************************************
@@ -627,11 +649,10 @@ HRESULT WINAPI CControlPanelFolder::Initialize(PCIDLIST_ABSOLUTE pidl)
     pidlRoot = ILClone(pidl);
 
     /* Create the inner reg folder */
+    REGFOLDERINITDATA RegInit = { static_cast<IShellFolder*>(this), &g_RegFolderInfo };
     HRESULT hr;
-    hr = CRegFolder_CreateInstance(&CLSID_ControlPanel,
+    hr = CRegFolder_CreateInstance(&RegInit,
                                    pidlRoot,
-                                   L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}",
-                                   L"ControlPanel",
                                    IID_PPV_ARG(IShellFolder2, &m_regFolder));
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
@@ -650,6 +671,23 @@ HRESULT WINAPI CControlPanelFolder::GetCurFolder(PIDLIST_ABSOLUTE * pidl)
         return E_POINTER;
     *pidl = ILClone(pidlRoot);
     return S_OK;
+}
+
+HRESULT WINAPI CControlPanelFolder::MessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch (uMsg)
+    {
+        case SFVM_DEFVIEWMODE:
+        {
+        #if ROSPOLICY_CONTROLSFOLDER_DEFLARGEICONS
+            *((FOLDERVIEWMODE*)lParam) = FVM_ICON;
+        #else
+            *((FOLDERVIEWMODE*)lParam) = IsOS(OS_SERVERADMINUI) ? FVM_LIST : FVM_ICON;
+        #endif
+            return S_OK;
+        }
+    }
+    return E_NOTIMPL;
 }
 
 CCPLItemMenu::CCPLItemMenu()

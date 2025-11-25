@@ -5,7 +5,7 @@
 #include <arch/pc/pcbios.h>
 
 EXTERN BootMain:PROC
-// EXTERN cmdline:DWORD
+EXTERN cmdline:DWORD
 
 EXTERN DiskStopFloppyMotor:PROC
 
@@ -71,8 +71,7 @@ FrldrStartup:
     rep stosq
 
     /* Pass the command line to BootMain */
-    // mov rcx, offset cmdline
-    xor rcx, rcx
+    mov rcx, offset cmdline
 
     /* GO! */
     call BootMain
@@ -215,7 +214,7 @@ SwitchToRealCompSegment:
     .byte HEX(0EA) // 32bit long jmp
 AddressOfRealModeEntryPoint:
     .long 0 // receives address of RealModeEntryPoint
-    .word HEX(20)//RMODE_CS
+    .word L_RMODE_CS
     nop
 
 CallRealMode_return:

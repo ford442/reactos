@@ -44,6 +44,8 @@ static SERVICE_STATUS ServiceStatus;
 HKEY hEnumKey = NULL;
 HKEY hClassKey = NULL;
 BOOL g_IsUISuppressed = FALSE;
+BOOL g_ShuttingDown = FALSE;
+BOOL g_IsLiveMedium = FALSE;
 
 /* FUNCTIONS *****************************************************************/
 
@@ -52,6 +54,9 @@ UpdateServiceStatus(
     _In_ DWORD dwState,
     _In_ DWORD dwCheckPoint)
 {
+    if ((dwState == SERVICE_STOPPED) || (dwState == SERVICE_STOP_PENDING))
+        g_ShuttingDown = TRUE;
+
     ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
     ServiceStatus.dwCurrentState = dwState;
     ServiceStatus.dwWin32ExitCode = 0;
@@ -196,6 +201,61 @@ GetSuppressNewUIValue(VOID)
     return bSuppressNewHWUI;
 }
 
+BOOL
+RunningOnLiveMedium(VOID)
+{
+    WCHAR Options[MAX_PATH];
+    PWSTR CurrentOption, NextOption;
+    HKEY hControlKey;
+    DWORD dwType;
+    DWORD dwSize;
+    DWORD dwError;
+    BOOL LiveMedium = FALSE;
+
+    DPRINT("RunningOnLiveMedium()\n");
+
+    /* Open the Setup key */
+    dwError = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                            L"SYSTEM\\CurrentControlSet\\Control",
+                            0,
+                            KEY_QUERY_VALUE,
+                            &hControlKey);
+    if (dwError != ERROR_SUCCESS)
+        goto done;
+
+    /* Read the CmdLine value */
+    dwSize = sizeof(Options);
+    dwError = RegQueryValueExW(hControlKey,
+                               L"SystemStartOptions",
+                               NULL,
+                               &dwType,
+                               (LPBYTE)Options,
+                               &dwSize);
+    if ((dwError != ERROR_SUCCESS) || (dwType != REG_SZ))
+        goto done;
+
+    /* Check for the '-mini' option */
+    CurrentOption = Options;
+    while (CurrentOption)
+    {
+        NextOption = wcschr(CurrentOption, L' ');
+        if (NextOption)
+            *NextOption = L'\0';
+        if (_wcsicmp(CurrentOption, L"MININT") == 0)
+        {
+            DPRINT("Found 'MININT' boot option\n");
+            LiveMedium = TRUE;
+            goto done;
+        }
+        CurrentOption = NextOption ? NextOption + 1 : NULL;
+    }
+
+done:
+    RegCloseKey(hControlKey);
+
+    return LiveMedium;
+}
+
 VOID WINAPI
 ServiceMain(DWORD argc, LPTSTR *argv)
 {
@@ -206,6 +266,8 @@ ServiceMain(DWORD argc, LPTSTR *argv)
     UNREFERENCED_PARAMETER(argv);
 
     DPRINT("ServiceMain() called\n");
+
+    g_IsLiveMedium = RunningOnLiveMedium();
 
     ServiceStatusHandle = RegisterServiceCtrlHandlerExW(ServiceName,
                                                         ServiceControlHandler,

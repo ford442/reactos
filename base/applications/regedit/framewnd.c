@@ -2,20 +2,7 @@
  * Regedit frame window
  *
  * Copyright (C) 2002 Robert Dickenson <robd@reactos.org>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * LICENSE: LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  */
 
 #include "regedit.h"
@@ -24,20 +11,10 @@
 #include <cderr.h>
 #include <objsel.h>
 
-/********************************************************************************
- * Global and Local Variables:
- */
-
 #define FAVORITES_MENU_POSITION 3
-
 static WCHAR s_szFavoritesRegKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Applets\\Regedit\\Favorites";
-
 static BOOL bInMenuLoop = FALSE;        /* Tells us if we are in the menu loop */
-
 extern WCHAR Suggestions[256];
-/*******************************************************************************
- * Local module support methods
- */
 
 static UINT ErrorBox(HWND hWnd, UINT Error)
 {
@@ -69,8 +46,6 @@ static void resize_frame_client(HWND hWnd)
     GetClientRect(hWnd, &rect);
     resize_frame_rect(hWnd, &rect);
 }
-
-/********************************************************************************/
 
 static void OnInitMenu(HWND hWnd)
 {
@@ -190,9 +165,32 @@ void SetupStatusBar(HWND hWnd, BOOL bResize)
 void UpdateStatusBar(void)
 {
     HKEY hKeyRoot;
-    LPCWSTR pszKeyPath = GetItemPath(g_pChildWnd->hTreeWnd, 0, &hKeyRoot);
+    LPCWSTR pszKeyPath, pszRootName;
+    LPWSTR pszFullPath;
+    DWORD dwCbFullPath;
 
-    SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)pszKeyPath);
+    pszKeyPath = GetItemPath(g_pChildWnd->hTreeWnd, 0, &hKeyRoot);
+    if (!pszKeyPath)
+        return;
+
+    pszRootName = get_root_key_name(hKeyRoot);
+    dwCbFullPath = (wcslen(pszRootName) + 1 + wcslen(pszKeyPath) + 1) * sizeof(WCHAR);
+    pszFullPath = malloc(dwCbFullPath);
+    if (!pszFullPath)
+        return;
+
+    if (pszKeyPath[0] != UNICODE_NULL)
+    {
+        StringCbPrintfW(pszFullPath, dwCbFullPath, L"%s%s%s", pszRootName,
+                        ((pszKeyPath[0] == L'\\') ? L"" : L"\\"), pszKeyPath);
+    }
+    else
+    {
+        StringCbCopyW(pszFullPath, dwCbFullPath, pszRootName);
+    }
+
+    SendMessageW(hStatusBar, SB_SETTEXTW, 0, (LPARAM)pszFullPath);
+    free(pszFullPath);
 }
 
 static void toggle_child(HWND hWnd, UINT cmd, HWND hchild)
@@ -1193,7 +1191,7 @@ static BOOL _CmdWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
                                                         ARRAY_SIZE(szComputerName));
                 if (hRet == S_OK)
                 {
-                    /* FIXME - connect to the registry */
+                    // FIXME - connect to the registry
                 }
 
                 FreeObjectPicker(ObjectPicker);
@@ -1363,14 +1361,6 @@ static BOOL _CmdWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     case ID_EDIT_PERMISSIONS:
         RegKeyEditPermissions(hWnd, hKeyRoot, NULL, keyPath);
         break;
-    case ID_REGISTRY_PRINTERSETUP:
-        //PRINTDLG pd;
-        //PrintDlg(&pd);
-        //PAGESETUPDLG psd;
-        //PageSetupDlg(&psd);
-        break;
-    case ID_REGISTRY_OPENLOCAL:
-        break;
     case ID_VIEW_REFRESH:
         RefreshTreeView(g_pChildWnd->hTreeWnd);
         keyPath = GetItemPath(g_pChildWnd->hTreeWnd, 0, &hKeyRoot);
@@ -1479,7 +1469,8 @@ LRESULT CALLBACK FrameWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         // For now, the Help dialog item is disabled because of lacking of HTML Help support
         EnableMenuItem(GetMenu(hWnd), ID_HELP_HELPTOPICS, MF_BYCOMMAND | MF_GRAYED);
         GetClientRect(hWnd, &rc);
-        CreateWindowExW(0, szChildClass, NULL, WS_CHILD | WS_VISIBLE,
+        CreateWindowExW(0, szChildClass, NULL,
+                        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                         rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,
                         hWnd, (HMENU)0, hInst, 0);
         break;

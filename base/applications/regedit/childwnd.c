@@ -3,20 +3,7 @@
  *
  * Copyright (C) 2002 Robert Dickenson <robd@reactos.org>
  * Copyright (C) 2024 Katayama Hirofumi MZ <katayama.hirofumi.mz@gmail.com>
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation; either
- * version 2.1 of the License, or (at your option) any later version.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * LICENSE: LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  */
 
 #include "regedit.h"
@@ -24,9 +11,9 @@
 #include <shlguid.h>
 
 ChildWnd* g_pChildWnd;
-static int last_split;
-HBITMAP SizingPattern = 0;
-HBRUSH  SizingBrush = 0;
+static int last_split = -1;
+HBITMAP SizingPattern;
+HBRUSH  SizingBrush;
 WCHAR Suggestions[256];
 
 static HRESULT WINAPI DummyEnumStringsQI(LPVOID This, REFIID riid, void**ppv)
@@ -112,15 +99,19 @@ extern void ResizeWnd(int cx, int cy)
     const int nButtonWidth = 44;
     const int nButtonHeight = 22;
     int cyEdge = GetSystemMetrics(SM_CYEDGE);
-    const UINT uFlags = SWP_NOZORDER | SWP_NOACTIVATE;
-    SetRect(&rt, 0, 0, cx, cy);
+    const UINT uFlags = SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS;
+
     cy = 0;
-    if (hStatusBar != NULL)
+    if (IsWindowVisible(hStatusBar))
     {
         GetWindowRect(hStatusBar, &rs);
         cy = rs.bottom - rs.top;
     }
+
     GetWindowRect(g_pChildWnd->hAddressBtnWnd, &rb);
+
+    GetClientRect(g_pChildWnd->hWnd, &rt);
+    RedrawWindow(g_pChildWnd->hWnd, &rt, NULL, RDW_INVALIDATE | RDW_NOCHILDREN);
 
     g_pChildWnd->nSplitPos = ClampSplitBarX(g_pChildWnd->hWnd, g_pChildWnd->nSplitPos);
 
@@ -161,7 +152,7 @@ static void draw_splitbar(HWND hWnd, int x)
 {
     RECT rt;
     HGDIOBJ OldObj;
-    HDC hdc = GetDC(hWnd);
+    HDC hdc = GetDCEx(hWnd, NULL, DCX_CACHE);
 
     if(!SizingPattern)
     {
@@ -172,7 +163,10 @@ static void draw_splitbar(HWND hWnd, int x)
     {
         SizingBrush = CreatePatternBrush(SizingPattern);
     }
-    GetClientRect(hWnd, &rt);
+
+    GetWindowRect(g_pChildWnd->hTreeWnd, &rt);
+    MapWindowPoints(NULL, hWnd, (POINT *)&rt, sizeof(rt) / sizeof(POINT));
+
     rt.left = x - SPLIT_WIDTH/2;
     rt.right = x + SPLIT_WIDTH/2+1;
     OldObj = SelectObject(hdc, SizingBrush);
@@ -181,11 +175,8 @@ static void draw_splitbar(HWND hWnd, int x)
     ReleaseDC(hWnd, hdc);
 }
 
-/*******************************************************************************
- * finish_splitbar [internal]
- *
- * make the splitbar invisible and resize the windows
- * (helper for ChildWndProc)
+/**
+ * make the splitbar invisible and resize the windows (helper for ChildWndProc)
  */
 static void finish_splitbar(HWND hWnd, int x)
 {
@@ -291,7 +282,6 @@ static void SuggestKeys(HKEY hRootKey, LPCWSTR pszKeyPath, LPWSTR pszSuggestions
     }
 }
 
-
 LRESULT CALLBACK AddressBarProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     WNDPROC oldwndproc;
@@ -374,15 +364,11 @@ UpdateAddress(HTREEITEM hItem, HKEY hRootKey, LPCWSTR pszPath, BOOL bSelectNone)
     }
 }
 
-/*******************************************************************************
+/**
+ * PURPOSE: Processes messages for the child windows.
  *
- *  FUNCTION: ChildWndProc(HWND, unsigned, WORD, LONG)
- *
- *  PURPOSE:  Processes messages for the child windows.
- *
- *  WM_COMMAND  - process the application menu
- *  WM_DESTROY  - post a quit message and return
- *
+ * WM_COMMAND - process the application menu
+ * WM_DESTROY - post a quit message and return
  */
 LRESULT CALLBACK ChildWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -409,7 +395,8 @@ LRESULT CALLBACK ChildWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         g_pChildWnd->nSplitPos = 190;
         g_pChildWnd->hWnd = hWnd;
 
-        style = WS_CHILD | WS_VISIBLE | WS_TABSTOP;
+        /* ES_AUTOHSCROLL style enables horizontal scrolling and shrinking */
+        style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL;
         g_pChildWnd->hAddressBarWnd = CreateWindowExW(WS_EX_CLIENTEDGE, L"Edit", NULL, style,
                                                       CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                                                       hWnd, (HMENU)0, hInst, 0);

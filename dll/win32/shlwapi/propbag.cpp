@@ -1392,7 +1392,7 @@ BOOL CViewStatePropertyBag::_CanAccessGlobalDefaultsBag() const
     if (_CanAccessFolderDefaultsBag())
         return TRUE;
 
-    return ((m_dwVspbFlags & SHGVSPB_GLOBALDEAFAULTS) == SHGVSPB_GLOBALDEAFAULTS);
+    return ((m_dwVspbFlags & SHGVSPB_GLOBALDEFAULTS) == SHGVSPB_GLOBALDEFAULTS);
 }
 
 BOOL CViewStatePropertyBag::_CanAccessInheritBag() const
@@ -1417,7 +1417,7 @@ void CViewStatePropertyBag::_ResetTryAgainFlag()
         m_bUserDefaultsBag = FALSE;
     else if ((m_dwVspbFlags & SHGVSPB_ALLUSERS) && (m_dwVspbFlags & SHGVSPB_PERFOLDER))
         m_bFolderDefaultsBag = FALSE;
-    else if ((m_dwVspbFlags & SHGVSPB_GLOBALDEAFAULTS) == SHGVSPB_GLOBALDEAFAULTS)
+    else if ((m_dwVspbFlags & SHGVSPB_GLOBALDEFAULTS) == SHGVSPB_GLOBALDEFAULTS)
         m_bGlobalDefaultsBag = FALSE;
 }
 
@@ -1463,7 +1463,7 @@ CViewStatePropertyBag::_GetMRUSlots(
         return hr;
 
     hr = pMruList->QueryPidl(pidl, cSlots, puSlots, pcSlots);
-    if (hr == S_OK && MODE_CAN_WRITE(dwMode))
+    if (hr == S_OK || MODE_CAN_WRITE(dwMode)) // FIXME: HACK! (Without this, a new pidl can never be saved)
         hr = pMruList->UsePidl(pidl, puSlots);
     else if (cSlots == 1)
         hr = E_FAIL;
@@ -1678,7 +1678,7 @@ BOOL CViewStatePropertyBag::_EnsureGlobalDefaultsBag(DWORD dwMode, REFIID riid)
     if (!m_pGlobalDefaultsBag && !m_bGlobalDefaultsBag && _CanAccessGlobalDefaultsBag())
     {
         m_bGlobalDefaultsBag = TRUE;
-        _CreateBag(NULL, m_pszPath, SHGVSPB_GLOBALDEAFAULTS, dwMode, riid, &m_pGlobalDefaultsBag);
+        _CreateBag(NULL, m_pszPath, SHGVSPB_GLOBALDEFAULTS, dwMode, riid, &m_pGlobalDefaultsBag);
     }
     return (m_pGlobalDefaultsBag != NULL);
 }
@@ -1917,13 +1917,9 @@ SHGetViewStatePropertyBag(
         ::LeaveCriticalSection(&g_csBagCacheLock);
         return hr;
     }
-
-    g_pCachedBag.Attach(pBag);
-
-    hr = g_pCachedBag->QueryInterface(riid, ppv);
-
+    g_pCachedBag = pBag;
     ::LeaveCriticalSection(&g_csBagCacheLock);
-    return hr;
+    return pBag->QueryInterface(riid, ppv);
 }
 
 EXTERN_C VOID FreeViewStatePropertyBagCache(VOID)

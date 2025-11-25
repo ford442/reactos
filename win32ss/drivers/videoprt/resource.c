@@ -24,7 +24,17 @@
 #define NDEBUG
 #include <debug.h>
 
+extern BOOLEAN VpBaseVideo;
+
 /* PRIVATE FUNCTIONS **********************************************************/
+
+static BOOLEAN
+IntIsVgaSaveDriver(
+    IN PVIDEO_PORT_DEVICE_EXTENSION DeviceExtension)
+{
+    UNICODE_STRING VgaSave = RTL_CONSTANT_STRING(L"\\Driver\\VgaSave");
+    return RtlEqualUnicodeString(&VgaSave, &DeviceExtension->DriverObject->DriverName, TRUE);
+}
 
 NTSTATUS NTAPI
 IntVideoPortGetLegacyResources(
@@ -209,8 +219,9 @@ IntVideoPortReleaseResources(
 
     if (!NT_SUCCESS(Status))
     {
-        DPRINT1("VideoPortReleaseResources IoReportResource failed with 0x%08lx ; ConflictDetected: %s\n",
-                Status, ConflictDetected ? "TRUE" : "FALSE");
+        ERR_(VIDEOPRT,
+             "VideoPortReleaseResources IoReportResource failed with 0x%08lx ; ConflictDetected: %s\n",
+             Status, ConflictDetected ? "TRUE" : "FALSE");
     }
     /* Ignore the returned status however... */
 }
@@ -286,11 +297,6 @@ IntVideoPortMapMemory(
    INFO_(VIDEOPRT, "- InIoSpace: %x\n", InIoSpace);
 
    InIoSpace &= ~VIDEO_MEMORY_SPACE_DENSE;
-   if ((InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE) != 0)
-   {
-      INFO_(VIDEOPRT, "VIDEO_MEMORY_SPACE_P6CACHE not supported, turning off\n");
-      InIoSpace &= ~VIDEO_MEMORY_SPACE_P6CACHE;
-   }
 
    if (ProcessHandle != NULL && (InIoSpace & VIDEO_MEMORY_SPACE_USER_MODE) == 0)
    {
@@ -334,7 +340,7 @@ IntVideoPortMapMemory(
    }
 
    AddressSpace = (ULONG)InIoSpace;
-   AddressSpace &= ~VIDEO_MEMORY_SPACE_USER_MODE;
+   AddressSpace &= ~(VIDEO_MEMORY_SPACE_USER_MODE | VIDEO_MEMORY_SPACE_P6CACHE);
    if (HalTranslateBusAddress(
           DeviceExtension->AdapterInterfaceType,
           DeviceExtension->SystemIoBusNumber,
@@ -343,7 +349,7 @@ IntVideoPortMapMemory(
           &TranslatedAddress) == FALSE)
    {
       if (Status)
-         *Status = ERROR_NOT_ENOUGH_MEMORY;
+         *Status = ERROR_INVALID_PARAMETER;
 
       return NULL;
    }
@@ -362,17 +368,22 @@ IntVideoPortMapMemory(
    if ((InIoSpace & VIDEO_MEMORY_SPACE_USER_MODE) != 0)
    {
       NTSTATUS NtStatus;
+      ULONG Protect;
+      if (InIoSpace & VIDEO_MEMORY_SPACE_P6CACHE)
+          Protect = PAGE_READWRITE | PAGE_WRITECOMBINE;
+      else
+          Protect = PAGE_READWRITE | PAGE_NOCACHE;
       MappedAddress = NULL;
       NtStatus = IntVideoPortMapPhysicalMemory(ProcessHandle,
                                                TranslatedAddress,
                                                NumberOfUchars,
-                                               PAGE_READWRITE/* | PAGE_WRITECOMBINE*/,
+                                               Protect,
                                                &MappedAddress);
       if (!NT_SUCCESS(NtStatus))
       {
-         WARN_(VIDEOPRT, "IntVideoPortMapPhysicalMemory() failed! (0x%x)\n", NtStatus);
+         ERR_(VIDEOPRT, "IntVideoPortMapPhysicalMemory() failed! (0x%x)\n", NtStatus);
          if (Status)
-            *Status = NO_ERROR;
+            *Status = ERROR_INVALID_PARAMETER;
          return NULL;
       }
       INFO_(VIDEOPRT, "Mapped user address = 0x%08x\n", MappedAddress);
@@ -415,8 +426,11 @@ IntVideoPortMapMemory(
       return MappedAddress;
    }
 
+   ERR_(VIDEOPRT,
+        "Couldn't map video memory. IoAddress: 0x%lx, NumberOfUchars: 0x%lx, InIoSpace: 0x%x\n",
+        IoAddress.u.LowPart, NumberOfUchars, InIoSpace);
    if (Status)
-      *Status = NO_ERROR;
+      *Status = ERROR_INVALID_PARAMETER;
 
    return NULL;
 }
@@ -993,6 +1007,16 @@ VideoPortVerifyAccessRanges(
                 &ConflictDetected);
 
     ExFreePoolWithTag(ResourceList, TAG_VIDEO_PORT);
+
+    /* If VgaSave driver is conflicting and we don't explicitely want
+     * to use it, ignore the problem (because win32k will try to use
+     * this driver only if all other ones are failing). */
+    if (Status == STATUS_CONFLICTING_ADDRESSES &&
+        IntIsVgaSaveDriver(DeviceExtension) &&
+        !VpBaseVideo)
+    {
+        return NO_ERROR;
+    }
 
     if (!NT_SUCCESS(Status) || ConflictDetected)
         return ERROR_INVALID_PARAMETER;
